@@ -34,127 +34,236 @@ from PIL import Image
 
 # Variables globales para la selección interactiva de ROI
 _select_roi_params = {
-    "current_roi_display_coords": None,  # (x, y, w, h) en coordenadas de la imagen mostrada
+    "current_roi_display_coords": None,  # (x, y, w, h) en coordenadas de la imagen zoomeada completa
     "drawing": False,
-    "start_point_display_coords": (-1, -1),
-    "current_mouse_pos_display": (-1,-1), # Posición actual del ratón en la imagen mostrada
+    "start_point_display_coords": (-1, -1), # Coordenadas en el canvas de visualización
+    "current_mouse_pos_display": (-1,-1), # Posición actual del ratón en el canvas
     "zoom_factor": 1.0,
     "original_image_ref": None,          # Imagen original (banda_uint8)
-    "temp_display_image": None,          # Imagen para mostrar con dibujos temporales
-    "window_name": "Selecciona ROI"
+    "temp_display_image": None,          # Imagen para mostrar con dibujos temporales (el canvas)
+    "window_name": "Selecciona ROI",
+    "pan_offset_display": (0.0, 0.0),    # (pan_x, pan_y) de la imagen zoomeada en el canvas
+    "panning": False,                    # True si se está haciendo paneo con click derecho
+    "pan_start_mouse_pos_canvas": (-1,-1),# Posición del ratón en canvas al iniciar paneo
+    "pan_start_offset_display": (0.0, 0.0),# pan_offset_display al iniciar paneo
+    "display_view_size": (None, None)    # (width, height) del canvas de visualización
 }
+
+def limit_pan_offset(pan_offset, zoom_factor, original_img_size, display_view_size):
+    """Limita el pan_offset para que la imagen zoomeada no se salga demasiado del display_view."""
+    pan_x, pan_y = pan_offset
+    orig_w, orig_h = original_img_size # Dimensiones de la imagen original sin zoom
+    view_w, view_h = display_view_size # Dimensiones del canvas
+
+    scaled_w = orig_w * zoom_factor
+    scaled_h = orig_h * zoom_factor
+
+    # pan_x es la coordenada X de la esquina superior izquierda de la imagen zoomeada,
+    # relativa a la esquina superior izquierda del canvas.
+    # Si scaled_w < view_w, la imagen es más pequeña que la vista. pan_x puede ir de 0 a view_w - scaled_w.
+    # Si scaled_w > view_w, la imagen es más grande. pan_x puede ir de view_w - scaled_w a 0.
+    
+    min_pan_x = min(0.0, view_w - scaled_w)
+    max_pan_x = max(0.0, view_w - scaled_w)
+    pan_x = np.clip(pan_x, min_pan_x, max_pan_x)
+
+    min_pan_y = min(0.0, view_h - scaled_h)
+    max_pan_y = max(0.0, view_h - scaled_h)
+    pan_y = np.clip(pan_y, min_pan_y, max_pan_y)
+    
+    return pan_x, pan_y
 
 def mouse_callback_interactive(event, x, y, flags, param):
     """Callback del ratón para la selección interactiva de ROI."""
     p = _select_roi_params
+    prev_zoom_factor = p["zoom_factor"]
+    orig_w, orig_h = p["original_image_ref"].shape[1], p["original_image_ref"].shape[0]
 
-    # Actualizar siempre la posición del ratón
+    # Actualizar siempre la posición del ratón en el canvas
     p["current_mouse_pos_display"] = (x,y)
 
     if event == cv2.EVENT_LBUTTONDOWN:
         p["drawing"] = True
-        p["start_point_display_coords"] = (x, y)
+        p["start_point_display_coords"] = (x, y) # Coords en canvas
         p["current_roi_display_coords"] = None  # Resetear ROI al empezar nuevo dibujo
 
     elif event == cv2.EVENT_MOUSEMOVE:
         if p["drawing"]:
-            # La lógica de dibujo y texto se maneja en el bucle principal
-            pass
+            pass # La lógica de dibujo y texto se maneja en el bucle principal
+        elif p["panning"]:
+            start_mouse_x_canvas, start_mouse_y_canvas = p["pan_start_mouse_pos_canvas"]
+            start_pan_x, start_pan_y = p["pan_start_offset_display"]
+            
+            dx_canvas = x - start_mouse_x_canvas
+            dy_canvas = y - start_mouse_y_canvas
+            
+            new_pan_x = start_pan_x + dx_canvas
+            new_pan_y = start_pan_y + dy_canvas
+            
+            p["pan_offset_display"] = limit_pan_offset(
+                (new_pan_x, new_pan_y), 
+                p["zoom_factor"],
+                (orig_w, orig_h),
+                p["display_view_size"]
+            )
 
     elif event == cv2.EVENT_LBUTTONUP:
-        p["drawing"] = False
-        end_point_display_coords = (x, y)
-        x1, y1 = p["start_point_display_coords"]
-        x2, y2 = end_point_display_coords
-        
-        roi_x_display = min(x1, x2)
-        roi_y_display = min(y1, y2)
-        roi_w_display = abs(x1 - x2)
-        roi_h_display = abs(y1 - y2)
+        if p["drawing"]: # Finalizar dibujo de ROI
+            p["drawing"] = False
+            end_point_canvas_coords = (x, y)
+            x1_can, y1_can = p["start_point_display_coords"]
+            x2_can, y2_can = end_point_canvas_coords
+            
+            roi_x_canvas = min(x1_can, x2_can)
+            roi_y_canvas = min(y1_can, y2_can)
+            roi_w_canvas = abs(x1_can - x2_can)
+            roi_h_canvas = abs(y1_can - y2_can)
 
-        if roi_w_display > 0 and roi_h_display > 0:
-            p["current_roi_display_coords"] = (roi_x_display, roi_y_display, roi_w_display, roi_h_display)
-        else:
-            p["current_roi_display_coords"] = None
+            if roi_w_canvas > 0 and roi_h_canvas > 0:
+                # Convertir ROI de coordenadas de canvas a coordenadas de imagen zoomeada
+                current_pan_x, current_pan_y = p["pan_offset_display"]
+                roi_x_zoomed = roi_x_canvas - current_pan_x
+                roi_y_zoomed = roi_y_canvas - current_pan_y
+                p["current_roi_display_coords"] = tuple(map(int,[roi_x_zoomed, roi_y_zoomed, roi_w_canvas, roi_h_canvas]))
+            else:
+                p["current_roi_display_coords"] = None
+        elif p["panning"]: # Finalizar paneo
+            p["panning"] = False
     
+    elif event == cv2.EVENT_RBUTTONDOWN:
+        p["panning"] = True
+        p["pan_start_mouse_pos_canvas"] = (x,y)
+        p["pan_start_offset_display"] = p["pan_offset_display"]
+
+    elif event == cv2.EVENT_RBUTTONUP: # También puede ocurrir si se suelta fuera de la ventana
+        p["panning"] = False
+
     elif event == cv2.EVENT_MOUSEWHEEL:
-        prev_zoom_factor = p["zoom_factor"]
+        cursor_x_canvas, cursor_y_canvas = x, y
+        pan_x_old, pan_y_old = p["pan_offset_display"]
+        
+        # Punto en imagen original bajo el cursor
+        orig_point_x = (cursor_x_canvas - pan_x_old) / prev_zoom_factor
+        orig_point_y = (cursor_y_canvas - pan_y_old) / prev_zoom_factor
+
         if flags > 0:  # Rueda hacia arriba (Zoom In)
             p["zoom_factor"] *= 1.1
         else:  # Rueda hacia abajo (Zoom Out)
             p["zoom_factor"] /= 1.1
-        
         p["zoom_factor"] = max(0.1, min(p["zoom_factor"], 20)) # Limitar zoom
+        new_zoom_factor = p["zoom_factor"]
+
+        # Nuevo pan_offset para mantener orig_point bajo el cursor
+        new_pan_x = cursor_x_canvas - orig_point_x * new_zoom_factor
+        new_pan_y = cursor_y_canvas - orig_point_y * new_zoom_factor
+        p["pan_offset_display"] = limit_pan_offset(
+            (new_pan_x, new_pan_y), new_zoom_factor, (orig_w, orig_h), p["display_view_size"]
+        )
 
         if p["current_roi_display_coords"]:
-            rx, ry, rw, rh = p["current_roi_display_coords"]
-            # Reescalar ROI manteniendo su centro relativo en la imagen zoomeada
-            factor_cambio = p["zoom_factor"] / prev_zoom_factor
+            rx_z, ry_z, rw_z, rh_z = p["current_roi_display_coords"]
+            factor_cambio = new_zoom_factor / prev_zoom_factor
             
-            center_x_display = rx + rw / 2
-            center_y_display = ry + rh / 2
+            # Centro del ROI en coordenadas de imagen original
+            center_x_orig = (rx_z + rw_z / 2) / prev_zoom_factor
+            center_y_orig = (ry_z + rh_z / 2) / prev_zoom_factor
             
-            new_rw_display = rw * factor_cambio
-            new_rh_display = rh * factor_cambio
+            # Nuevas dimensiones y centro del ROI en la imagen zoomeada con new_zoom_factor
+            new_rw_z = rw_z * factor_cambio
+            new_rh_z = rh_z * factor_cambio
+            new_center_x_z = center_x_orig * new_zoom_factor
+            new_center_y_z = center_y_orig * new_zoom_factor
             
-            new_rx_display = center_x_display - new_rw_display / 2
-            new_ry_display = center_y_display - new_rh_display / 2
+            new_rx_z = new_center_x_z - new_rw_z / 2
+            new_ry_z = new_center_y_z - new_rh_z / 2
             
-            p["current_roi_display_coords"] = tuple(map(int, [new_rx_display, new_ry_display, new_rw_display, new_rh_display]))
+            p["current_roi_display_coords"] = tuple(map(int, [new_rx_z, new_ry_z, new_rw_z, new_rh_z]))
 
 
 def select_roi_interactive_custom(image_to_select_on):
     """Permite al usuario seleccionar una ROI de forma interactiva con zoom y visualización de dimensiones."""
     p = _select_roi_params
     p["original_image_ref"] = image_to_select_on.copy()
-    p["window_name"] = "ROI (Z/X/Rueda: Zoom, R: Reset, ENTER: OK, ESC: Cancelar)"
+    
+    h_orig, w_orig = p["original_image_ref"].shape[:2]
+    # Usar las dimensiones originales de la imagen para el canvas de visualización
+    # Podría limitarse a un tamaño máximo si las imágenes son muy grandes, ej:
+    # MAX_VIEW_W, MAX_VIEW_H = 1280, 720
+    # display_view_w = min(w_orig, MAX_VIEW_W)
+    # display_view_h = min(h_orig, MAX_VIEW_H)
+    # p["display_view_size"] = (display_view_w, display_view_h)
+    p["display_view_size"] = (w_orig, h_orig)
+
+    p["window_name"] = "ROI (Z/X/Rueda: Zoom, ClickDer+Arrastrar: Mover, R: Reset, ENTER: OK, ESC: Cancelar)"
     p["zoom_factor"] = 1.0
+    p["pan_offset_display"] = (0.0, 0.0)
     p["current_roi_display_coords"] = None
     p["drawing"] = False
+    p["panning"] = False
     p["start_point_display_coords"] = (-1,-1)
     p["current_mouse_pos_display"] = (-1,-1)
 
-
-    cv2.namedWindow(p["window_name"])
+    cv2.namedWindow(p["window_name"]) # WINDOW_AUTOSIZE por defecto, se ajustará a display_view_size
     cv2.setMouseCallback(p["window_name"], mouse_callback_interactive)
 
-    h_orig, w_orig = p["original_image_ref"].shape[:2]
+    display_view_w, display_view_h = p["display_view_size"]
 
     while True:
-        w_zoomed = int(w_orig * p["zoom_factor"])
-        h_zoomed = int(h_orig * p["zoom_factor"])
+        # Imagen original escalada al zoom_factor actual
+        scaled_img_w = int(w_orig * p["zoom_factor"])
+        scaled_img_h = int(h_orig * p["zoom_factor"])
         
-        # Asegurar dimensiones mínimas para resize
-        if w_zoomed < 1: w_zoomed = 1
-        if h_zoomed < 1: h_zoomed = 1
+        if scaled_img_w < 1: scaled_img_w = 1
+        if scaled_img_h < 1: scaled_img_h = 1
         
-        current_display_base = cv2.resize(p["original_image_ref"], (w_zoomed, h_zoomed), interpolation=cv2.INTER_LINEAR)
-        # Si la imagen es monocromática, convertirla a BGR para dibujar en color
-        if len(current_display_base.shape) == 2:
-            p["temp_display_image"] = cv2.cvtColor(current_display_base, cv2.COLOR_GRAY2BGR)
-        else:
-            p["temp_display_image"] = current_display_base.copy()
+        scaled_image = cv2.resize(p["original_image_ref"], (scaled_img_w, scaled_img_h), interpolation=cv2.INTER_LINEAR)
 
-        # Dibujar rectángulo mientras se arrastra
+        # Crear canvas del tamaño de display_view_size
+        # Asumimos que original_image_ref es monocromática (banda_uint8)
+        canvas = np.zeros((display_view_h, display_view_w), dtype=p["original_image_ref"].dtype)
+        
+        current_pan_x, current_pan_y = p["pan_offset_display"]
+
+        # Calcular la región de scaled_image (src) a copiar y dónde en canvas (dst)
+        src_x = int(max(0, -current_pan_x))
+        src_y = int(max(0, -current_pan_y))
+        dst_x = int(max(0, current_pan_x))
+        dst_y = int(max(0, current_pan_y))
+
+        copy_w = min(scaled_img_w - src_x, display_view_w - dst_x)
+        copy_h = min(scaled_img_h - src_y, display_view_h - dst_y)
+
+        if copy_w > 0 and copy_h > 0:
+            canvas[dst_y:dst_y+copy_h, dst_x:dst_x+copy_w] = \
+                scaled_image[src_y:src_y+copy_h, src_x:src_x+copy_w]
+        
+        # Convertir canvas a BGR para dibujar en color
+        p["temp_display_image"] = cv2.cvtColor(canvas, cv2.COLOR_GRAY2BGR)
+
+        # Dibujar rectángulo mientras se arrastra (coordenadas de canvas)
         if p["drawing"] and p["start_point_display_coords"] != (-1,-1) and p["current_mouse_pos_display"] != (-1,-1):
             cv2.rectangle(p["temp_display_image"], p["start_point_display_coords"], p["current_mouse_pos_display"], (0, 255, 0), 1)
-            w_disp_rt = abs(p["current_mouse_pos_display"][0] - p["start_point_display_coords"][0])
-            h_disp_rt = abs(p["current_mouse_pos_display"][1] - p["start_point_display_coords"][1])
-            w_orig_rt = int(w_disp_rt / p["zoom_factor"])
-            h_orig_rt = int(h_disp_rt / p["zoom_factor"])
+            w_disp_rt_canvas = abs(p["current_mouse_pos_display"][0] - p["start_point_display_coords"][0])
+            h_disp_rt_canvas = abs(p["current_mouse_pos_display"][1] - p["start_point_display_coords"][1])
+            w_orig_rt = int(w_disp_rt_canvas / p["zoom_factor"])
+            h_orig_rt = int(h_disp_rt_canvas / p["zoom_factor"])
             text_rt = f"Drawing: W:{w_orig_rt} H:{h_orig_rt}"
             cv2.putText(p["temp_display_image"], text_rt, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
 
-        # Dibujar ROI seleccionada
+        # Dibujar ROI seleccionada (convertir de zoomeado a canvas)
         elif p["current_roi_display_coords"]:
-            rx_d, ry_d, rw_d, rh_d = p["current_roi_display_coords"]
-            cv2.rectangle(p["temp_display_image"], (rx_d, ry_d), (rx_d + rw_d, ry_d + rh_d), (0, 0, 255), 2)
-            w_final_orig = int(rw_d / p["zoom_factor"])
-            h_final_orig = int(rh_d / p["zoom_factor"])
+            rx_z, ry_z, rw_z, rh_z = map(int,p["current_roi_display_coords"])
+            # Coordenadas para dibujar en el canvas
+            draw_rx = int(rx_z + current_pan_x)
+            draw_ry = int(ry_z + current_pan_y)
+            cv2.rectangle(p["temp_display_image"], (draw_rx, draw_ry), (draw_rx + rw_z, draw_ry + rh_z), (0, 0, 255), 2)
+            
+            w_final_orig = int(rw_z / p["zoom_factor"])
+            h_final_orig = int(rh_z / p["zoom_factor"])
             text_final = f"Selected: W:{w_final_orig} H:{h_final_orig}"
             cv2.putText(p["temp_display_image"], text_final, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 1)
 
-        info_text = f"Zoom:{p['zoom_factor']:.2f}x (Z/X/Rueda). R:Reset. ENTER:OK. ESC:Cancel."
+        info_text = f"Zoom:{p['zoom_factor']:.2f}x (Z/X/Rueda). Pan:ClickDer+Arr. R:Reset. ENTER:OK. ESC:Cancel."
         cv2.putText(p["temp_display_image"], info_text, (10, p["temp_display_image"].shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
         cv2.imshow(p["window_name"], p["temp_display_image"])
@@ -165,12 +274,14 @@ def select_roi_interactive_custom(image_to_select_on):
             return None
         elif k == 13:  # Enter
             if p["current_roi_display_coords"]:
-                rx_d, ry_d, rw_d, rh_d = p["current_roi_display_coords"]
-                orig_x = int(rx_d / p["zoom_factor"])
-                orig_y = int(ry_d / p["zoom_factor"])
-                orig_w = int(rw_d / p["zoom_factor"])
-                orig_h = int(rh_d / p["zoom_factor"])
+                rx_z, ry_z, rw_z, rh_z = p["current_roi_display_coords"]
+                # Convertir ROI de coordenadas de imagen zoomeada a coordenadas de imagen original
+                orig_x = int(rx_z / p["zoom_factor"])
+                orig_y = int(ry_z / p["zoom_factor"])
+                orig_w = int(rw_z / p["zoom_factor"])
+                orig_h = int(rh_z / p["zoom_factor"])
 
+                # Asegurar que las coordenadas originales están dentro de los límites de la imagen original
                 orig_x = max(0, orig_x)
                 orig_y = max(0, orig_y)
                 if orig_x + orig_w > w_orig: orig_w = w_orig - orig_x
@@ -185,35 +296,60 @@ def select_roi_interactive_custom(image_to_select_on):
             else:
                 print("Ninguna ROI seleccionada.")
         
-        elif k == ord('z'): 
+        elif k == ord('z') or k == ord('x'): 
             prev_zoom_factor = p["zoom_factor"]
-            p["zoom_factor"] *= 1.25
-            p["zoom_factor"] = min(p["zoom_factor"], 20) # Limitar zoom
-            if p["current_roi_display_coords"]:
-                rx,ry,rw,rh = p["current_roi_display_coords"]
-                factor_cambio = p["zoom_factor"] / prev_zoom_factor
-                center_x_display, center_y_display = rx + rw / 2, ry + rh / 2
-                new_rw_display, new_rh_display = rw * factor_cambio, rh * factor_cambio
-                new_rx_display, new_ry_display = center_x_display - new_rw_display / 2, center_y_display - new_rh_display / 2
-                p["current_roi_display_coords"] = tuple(map(int, [new_rx_display, new_ry_display, new_rw_display, new_rh_display]))
+            pan_x_old, pan_y_old = p["pan_offset_display"]
 
-
-        elif k == ord('x'):
-            prev_zoom_factor = p["zoom_factor"]
-            p["zoom_factor"] /= 1.25
-            p["zoom_factor"] = max(0.1, p["zoom_factor"]) # Limitar zoom
+            # Determinar el punto de centrado para el zoom (centro del ROI o centro de la ventana)
+            cursor_x_canvas, cursor_y_canvas = 0,0
             if p["current_roi_display_coords"]:
-                rx,ry,rw,rh = p["current_roi_display_coords"]
-                factor_cambio = p["zoom_factor"] / prev_zoom_factor
-                center_x_display, center_y_display = rx + rw / 2, ry + rh / 2
-                new_rw_display, new_rh_display = rw * factor_cambio, rh * factor_cambio
-                new_rx_display, new_ry_display = center_x_display - new_rw_display / 2, center_y_display - new_rh_display / 2
-                p["current_roi_display_coords"] = tuple(map(int, [new_rx_display, new_ry_display, new_rw_display, new_rh_display]))
+                rx_z_roi, ry_z_roi, rw_z_roi, rh_z_roi = p["current_roi_display_coords"]
+                center_roi_x_z = rx_z_roi + rw_z_roi / 2
+                center_roi_y_z = ry_z_roi + rh_z_roi / 2
+                cursor_x_canvas = center_roi_x_z + pan_x_old
+                cursor_y_canvas = center_roi_y_z + pan_y_old
+            else:
+                cursor_x_canvas = display_view_w / 2
+                cursor_y_canvas = display_view_h / 2
+            
+            orig_point_x = (cursor_x_canvas - pan_x_old) / prev_zoom_factor
+            orig_point_y = (cursor_y_canvas - pan_y_old) / prev_zoom_factor
+
+            if k == ord('z'):
+                p["zoom_factor"] *= 1.25
+            else: # k == ord('x')
+                p["zoom_factor"] /= 1.25
+            p["zoom_factor"] = max(0.1, min(p["zoom_factor"], 20))
+            new_zoom_factor = p["zoom_factor"]
+
+            new_pan_x = cursor_x_canvas - orig_point_x * new_zoom_factor
+            new_pan_y = cursor_y_canvas - orig_point_y * new_zoom_factor
+            p["pan_offset_display"] = limit_pan_offset(
+                (new_pan_x, new_pan_y), new_zoom_factor, (w_orig, h_orig), p["display_view_size"]
+            )
+            
+            if p["current_roi_display_coords"]:
+                rx_z, ry_z, rw_z, rh_z = p["current_roi_display_coords"]
+                factor_cambio = new_zoom_factor / prev_zoom_factor
+                
+                center_x_orig_roi = (rx_z + rw_z / 2) / prev_zoom_factor
+                center_y_orig_roi = (ry_z + rh_z / 2) / prev_zoom_factor
+                
+                new_rw_z = rw_z * factor_cambio
+                new_rh_z = rh_z * factor_cambio
+                new_center_x_z = center_x_orig_roi * new_zoom_factor
+                new_center_y_z = center_y_orig_roi * new_zoom_factor
+                
+                new_rx_z = new_center_x_z - new_rw_z / 2
+                new_ry_z = new_center_y_z - new_rh_z / 2
+                p["current_roi_display_coords"] = tuple(map(int, [new_rx_z, new_ry_z, new_rw_z, new_rh_z]))
 
         elif k == ord('r'): 
             p["zoom_factor"] = 1.0
+            p["pan_offset_display"] = (0.0, 0.0)
             p["current_roi_display_coords"] = None
             p["drawing"] = False
+            p["panning"] = False
             p["start_point_display_coords"] = (-1,-1)
 
     cv2.destroyAllWindows()
