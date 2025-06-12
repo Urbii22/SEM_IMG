@@ -33,9 +33,15 @@ def analizar_imagen_matriz(ruta_imagen, dimensiones_grid, ruta_csv_salida):
 
     # --- 1. Definición del color rojo en el espacio de color HSV ---
     imagen_hsv = cv2.cvtColor(imagen, cv2.COLOR_BGR2HSV)
-    rojo_bajo1 = np.array([0, 100, 100], np.uint8)
+    # Umbrales originales:
+    # rojo_bajo1 = np.array([0, 100, 100], np.uint8)
+    # rojo_bajo2 = np.array([170, 100, 100], np.uint8)
+
+    # Umbrales modificados para mayor sensibilidad a rojos claros:
+    # Se reduce el mínimo de Saturación (S) y Valor (V)
+    rojo_bajo1 = np.array([0, 70, 70], np.uint8)  # S y V reducidos desde 100
     rojo_alto1 = np.array([10, 255, 255], np.uint8)
-    rojo_bajo2 = np.array([170, 100, 100], np.uint8)
+    rojo_bajo2 = np.array([170, 70, 70], np.uint8) # S y V reducidos desde 100
     rojo_alto2 = np.array([179, 255, 255], np.uint8)
     mascara1 = cv2.inRange(imagen_hsv, rojo_bajo1, rojo_alto1)
     mascara2 = cv2.inRange(imagen_hsv, rojo_bajo2, rojo_alto2)
@@ -80,7 +86,7 @@ def analizar_imagen_matriz(ruta_imagen, dimensiones_grid, ruta_csv_salida):
 
 
 if __name__ == '__main__':
-    DIMENSIONES = (20, 30)
+    DIMENSIONES = (14, 16)
 
     root = tk.Tk()
     root.withdraw()
