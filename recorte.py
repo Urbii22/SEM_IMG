@@ -32,6 +32,10 @@ from tkinter import Tk, filedialog
 import sys
 from PIL import Image
 
+# Dimensiones fijas para la ROI (ancho, alto en píxeles originales)
+FIXED_ROI_WIDTH_ORIG = 18
+FIXED_ROI_HEIGHT_ORIG = 14
+
 # Variables globales para la selección interactiva de ROI
 _select_roi_params = {
     "current_roi_display_coords": None,  # (x, y, w, h) en coordenadas de la imagen zoomeada completa
@@ -116,10 +120,11 @@ def mouse_callback_interactive(event, x, y, flags, param):
             
             roi_x_canvas = min(x1_can, x2_can)
             roi_y_canvas = min(y1_can, y2_can)
-            roi_w_canvas = abs(x1_can - x2_can)
-            roi_h_canvas = abs(y1_can - y2_can)
+            # Usar dimensiones fijas para la ROI, escaladas por el zoom
+            roi_w_canvas = int(FIXED_ROI_WIDTH_ORIG * p["zoom_factor"])
+            roi_h_canvas = int(FIXED_ROI_HEIGHT_ORIG * p["zoom_factor"])
 
-            if roi_w_canvas > 0 and roi_h_canvas > 0:
+            if roi_w_canvas > 0 and roi_h_canvas > 0: # Siempre será true con valores fijos > 0
                 # Convertir ROI de coordenadas de canvas a coordenadas de imagen zoomeada
                 current_pan_x, current_pan_y = p["pan_offset_display"]
                 roi_x_zoomed = roi_x_canvas - current_pan_x
@@ -169,8 +174,8 @@ def mouse_callback_interactive(event, x, y, flags, param):
             center_y_orig = (ry_z + rh_z / 2) / prev_zoom_factor
             
             # Nuevas dimensiones y centro del ROI en la imagen zoomeada con new_zoom_factor
-            new_rw_z = rw_z * factor_cambio
-            new_rh_z = rh_z * factor_cambio
+            new_rw_z = int(FIXED_ROI_WIDTH_ORIG * new_zoom_factor)
+            new_rh_z = int(FIXED_ROI_HEIGHT_ORIG * new_zoom_factor)
             new_center_x_z = center_x_orig * new_zoom_factor
             new_center_y_z = center_y_orig * new_zoom_factor
             
@@ -186,13 +191,14 @@ def select_roi_interactive_custom(image_to_select_on):
     p["original_image_ref"] = image_to_select_on.copy()
     
     h_orig, w_orig = p["original_image_ref"].shape[:2]
-    # Usar las dimensiones originales de la imagen para el canvas de visualización
-    # Podría limitarse a un tamaño máximo si las imágenes son muy grandes, ej:
-    # MAX_VIEW_W, MAX_VIEW_H = 1280, 720
-    # display_view_w = min(w_orig, MAX_VIEW_W)
-    # display_view_h = min(h_orig, MAX_VIEW_H)
-    # p["display_view_size"] = (display_view_w, display_view_h)
-    p["display_view_size"] = (w_orig, h_orig)
+    
+    # Limitar el tamaño de la ventana de visualización para mejorar la usabilidad en pantallas grandes/pequeñas
+    # y asegurar que el paneo funcione correctamente.
+    MAX_VIEW_W, MAX_VIEW_H = 1280, 720 # Puedes ajustar estos valores si es necesario
+    
+    display_view_w = min(w_orig, MAX_VIEW_W)
+    display_view_h = min(h_orig, MAX_VIEW_H)
+    p["display_view_size"] = (display_view_w, display_view_h)
 
     p["window_name"] = "ROI (Z/X/Rueda: Zoom, ClickDer+Arrastrar: Mover, R: Reset, ENTER: OK, ESC: Cancelar)"
     p["zoom_factor"] = 1.0
@@ -241,13 +247,19 @@ def select_roi_interactive_custom(image_to_select_on):
         p["temp_display_image"] = cv2.cvtColor(canvas, cv2.COLOR_GRAY2BGR)
 
         # Dibujar rectángulo mientras se arrastra (coordenadas de canvas)
-        if p["drawing"] and p["start_point_display_coords"] != (-1,-1) and p["current_mouse_pos_display"] != (-1,-1):
-            cv2.rectangle(p["temp_display_image"], p["start_point_display_coords"], p["current_mouse_pos_display"], (0, 255, 0), 1)
-            w_disp_rt_canvas = abs(p["current_mouse_pos_display"][0] - p["start_point_display_coords"][0])
-            h_disp_rt_canvas = abs(p["current_mouse_pos_display"][1] - p["start_point_display_coords"][1])
-            w_orig_rt = int(w_disp_rt_canvas / p["zoom_factor"])
-            h_orig_rt = int(h_disp_rt_canvas / p["zoom_factor"])
-            text_rt = f"Drawing: W:{w_orig_rt} H:{h_orig_rt}"
+        if p["drawing"] and p["start_point_display_coords"] != (-1,-1):
+            start_x_canvas, start_y_canvas = p["start_point_display_coords"]
+            rect_w_canvas = int(FIXED_ROI_WIDTH_ORIG * p["zoom_factor"])
+            rect_h_canvas = int(FIXED_ROI_HEIGHT_ORIG * p["zoom_factor"])
+            
+            end_x_canvas = start_x_canvas + rect_w_canvas
+            end_y_canvas = start_y_canvas + rect_h_canvas
+            
+            cv2.rectangle(p["temp_display_image"], 
+                          (start_x_canvas, start_y_canvas), 
+                          (end_x_canvas, end_y_canvas), 
+                          (0, 255, 0), 1)
+            text_rt = f"Placing: W:{FIXED_ROI_WIDTH_ORIG} H:{FIXED_ROI_HEIGHT_ORIG}"
             cv2.putText(p["temp_display_image"], text_rt, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
 
         # Dibujar ROI seleccionada (convertir de zoomeado a canvas)
@@ -258,9 +270,8 @@ def select_roi_interactive_custom(image_to_select_on):
             draw_ry = int(ry_z + current_pan_y)
             cv2.rectangle(p["temp_display_image"], (draw_rx, draw_ry), (draw_rx + rw_z, draw_ry + rh_z), (0, 0, 255), 2)
             
-            w_final_orig = int(rw_z / p["zoom_factor"])
-            h_final_orig = int(rh_z / p["zoom_factor"])
-            text_final = f"Selected: W:{w_final_orig} H:{h_final_orig}"
+            # Las dimensiones originales son fijas
+            text_final = f"Selected: W:{FIXED_ROI_WIDTH_ORIG} H:{FIXED_ROI_HEIGHT_ORIG}"
             cv2.putText(p["temp_display_image"], text_final, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,255), 1)
 
         info_text = f"Zoom:{p['zoom_factor']:.2f}x (Z/X/Rueda). Pan:ClickDer+Arr. R:Reset. ENTER:OK. ESC:Cancel."
@@ -278,20 +289,27 @@ def select_roi_interactive_custom(image_to_select_on):
                 # Convertir ROI de coordenadas de imagen zoomeada a coordenadas de imagen original
                 orig_x = int(rx_z / p["zoom_factor"])
                 orig_y = int(ry_z / p["zoom_factor"])
-                orig_w = int(rw_z / p["zoom_factor"])
-                orig_h = int(rh_z / p["zoom_factor"])
+                # Usar dimensiones fijas para la ROI original
+                orig_w = FIXED_ROI_WIDTH_ORIG
+                orig_h = FIXED_ROI_HEIGHT_ORIG
 
                 # Asegurar que las coordenadas originales están dentro de los límites de la imagen original
+                # Y que la ROI de tamaño fijo cabe completamente.
                 orig_x = max(0, orig_x)
                 orig_y = max(0, orig_y)
-                if orig_x + orig_w > w_orig: orig_w = w_orig - orig_x
-                if orig_y + orig_h > h_orig: orig_h = h_orig - orig_y
                 
-                if orig_w > 0 and orig_h > 0:
+                if orig_x + orig_w > w_orig or orig_y + orig_h > h_orig:
+                    print(f"Advertencia: La ROI de {FIXED_ROI_WIDTH_ORIG}x{FIXED_ROI_HEIGHT_ORIG} no cabe completamente en la imagen desde esta posición ({orig_x},{orig_y}).")
+                    print(f"Máxima posición para esquina superior izquierda: x={w_orig-orig_w}, y={h_orig-orig_h}")
+                    print("Intenta de nuevo seleccionando una posición válida.")
+                    p["current_roi_display_coords"] = None # Invalidar ROI para forzar nueva selección
+                
+                elif orig_w > 0 and orig_h > 0: # Siempre true para valores fijos > 0
                     cv2.destroyAllWindows()
                     return (orig_x, orig_y, orig_w, orig_h)
                 else:
-                    print("Advertencia: ROI inválida después de reescalar. Intenta de nuevo.")
+                    # Esto no debería ocurrir con valores fijos positivos
+                    print("Advertencia: ROI inválida (tamaño cero o negativo). Intenta de nuevo.")
                     p["current_roi_display_coords"] = None 
             else:
                 print("Ninguna ROI seleccionada.")
@@ -329,14 +347,14 @@ def select_roi_interactive_custom(image_to_select_on):
             )
             
             if p["current_roi_display_coords"]:
-                rx_z, ry_z, rw_z, rh_z = p["current_roi_display_coords"]
-                factor_cambio = new_zoom_factor / prev_zoom_factor
+                rx_z, ry_z, rw_z, rh_z = p["current_roi_display_coords"] # rw_z, rh_z no se usan para calcular el nuevo tamaño
+                # factor_cambio = new_zoom_factor / prev_zoom_factor # No necesario para dimensiones fijas
                 
-                center_x_orig_roi = (rx_z + rw_z / 2) / prev_zoom_factor
-                center_y_orig_roi = (ry_z + rh_z / 2) / prev_zoom_factor
+                center_x_orig_roi = (rx_z + (FIXED_ROI_WIDTH_ORIG * prev_zoom_factor) / 2) / prev_zoom_factor
+                center_y_orig_roi = (ry_z + (FIXED_ROI_HEIGHT_ORIG * prev_zoom_factor) / 2) / prev_zoom_factor
                 
-                new_rw_z = rw_z * factor_cambio
-                new_rh_z = rh_z * factor_cambio
+                new_rw_z = int(FIXED_ROI_WIDTH_ORIG * new_zoom_factor)
+                new_rh_z = int(FIXED_ROI_HEIGHT_ORIG * new_zoom_factor)
                 new_center_x_z = center_x_orig_roi * new_zoom_factor
                 new_center_y_z = center_y_orig_roi * new_zoom_factor
                 

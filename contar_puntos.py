@@ -86,7 +86,7 @@ def analizar_imagen_matriz(ruta_imagen, dimensiones_grid, ruta_csv_salida):
 
 
 if __name__ == '__main__':
-    DIMENSIONES = (14, 16)
+    DIMENSIONES = (14, 18)
 
     root = tk.Tk()
     root.withdraw()
@@ -99,11 +99,22 @@ if __name__ == '__main__':
     if not ruta_imagen:
         print("Operación cancelada. No se seleccionó ninguna imagen.")
     else:
-        nombre_base, _ = os.path.splitext(os.path.basename(ruta_imagen))
-        ruta_salida = f"{nombre_base}_analisis_matriz_{DIMENSIONES[0]}x{DIMENSIONES[1]}.csv"
+        nombre_base_imagen, _ = os.path.splitext(os.path.basename(ruta_imagen))
+        nombre_csv_sugerido = f"{nombre_base_imagen}_analisis_matriz_{DIMENSIONES[0]}x{DIMENSIONES[1]}.csv"
         
-        analizar_imagen_matriz(
-            ruta_imagen=ruta_imagen,
-            dimensiones_grid=DIMENSIONES,
-            ruta_csv_salida=ruta_salida
+        # Abrir diálogo para seleccionar dónde guardar el CSV
+        ruta_csv_salida = filedialog.asksaveasfilename(
+            title="Guardar archivo CSV como...",
+            initialfile=nombre_csv_sugerido,
+            defaultextension=".csv",
+            filetypes=[("Archivos CSV", "*.csv"), ("Todos los ficheros", "*.*")]
         )
+
+        if not ruta_csv_salida:
+            print("Operación cancelada. No se seleccionó una ubicación para guardar el CSV.")
+        else:
+            analizar_imagen_matriz(
+                ruta_imagen=ruta_imagen,
+                dimensiones_grid=DIMENSIONES,
+                ruta_csv_salida=ruta_csv_salida
+            )
