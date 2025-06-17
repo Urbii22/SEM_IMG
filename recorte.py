@@ -33,8 +33,9 @@ import sys
 from PIL import Image
 
 # Dimensiones fijas para la ROI (ancho, alto en píxeles originales)
-FIXED_ROI_WIDTH_ORIG = 18
-FIXED_ROI_HEIGHT_ORIG = 14
+FIXED_ROI_WIDTH_ORIG = 40
+FIXED_ROI_HEIGHT_ORIG = 32
+
 
 # Variables globales para la selección interactiva de ROI
 _select_roi_params = {
@@ -409,7 +410,7 @@ def main():
     if not hdr_path.exists():
         sys.exit(f"No se encontró el archivo asociado: {hdr_path}")
 
-    # 2. Cargar cubo HSI y extraer banda ~728 nm para visualización
+    # 2. Cargar cubo HSI y extraer banda ~728 nm para visualización (una sola vez)
     print("-> Cargando cubo hiperespectral…")
     try:
         cube_hsi = spy.open_image(str(hdr_path))
@@ -422,7 +423,7 @@ def main():
         if scale_factor_str:
             try:
                 scale_factor = float(scale_factor_str)
-                if data.max() < 10.0:
+                if data.max() < 10.0: # Heurística: si los valores son pequeños, probablemente estén escalados
                     print(f"Factor de escala encontrado: {scale_factor}. Revirtiendo a valores DN originales...")
                     data *= scale_factor
             except (ValueError, TypeError):
@@ -432,106 +433,130 @@ def main():
     except Exception as e:
         sys.exit(f"Error cargando el cubo hiperespectral: {e}")
 
-    # Intentamos extraer banda ~728 nm
     TARGET_WL = 728.24
     band_idx = 0
-    wl_str = ""
+    wl_str_original = "" # Para el nombre del archivo CSV
     meta_wl = cube_hsi.metadata.get("wavelength", [])
     if meta_wl:
         try:
             wl = np.array(meta_wl, dtype=float)
             band_idx = int(np.argmin(np.abs(wl - TARGET_WL)))
-            wl_str = f"_{int(round(wl[band_idx]))}nm"
-            print(f"Banda objetivo: índice {band_idx} (≈ {wl[band_idx]:.1f} nm)")
+            wl_str_original = f"_{int(round(wl[band_idx]))}nm"
+            print(f"Banda objetivo para visualización y CSV: índice {band_idx} (≈ {wl[band_idx]:.1f} nm)")
         except Exception:
-            print("No se pudo interpretar metadata de longitudes de onda. Se usará banda 0.")
+            print("No se pudo interpretar metadata de longitudes de onda. Se usará banda 0 para visualización y CSV.")
     else:
-        print("No hay metadata de longitudes de onda. Se usará la primera banda (0).")
+        print("No hay metadata de longitudes de onda. Se usará la primera banda (0) para visualización y CSV.")
 
     banda_para_visualizar = data[:, :, band_idx]
     banda_uint8 = cv2.normalize(banda_para_visualizar, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
 
-    # 3. Seleccionar ROI con el ratón de forma interactiva
-    # roi = cv2.selectROI("Selecciona ROI y pulsa ENTER", banda_uint8, fromCenter=False, showCrosshair=True)
-    # cv2.destroyAllWindows()
-    roi = select_roi_interactive_custom(banda_uint8)
-
-    if not roi or roi[2] == 0 or roi[3] == 0: # roi puede ser None si se cancela
-        sys.exit("No se definió ninguna ROI válida o se canceló la operación. Saliendo.")
-        
-    x, y, w, h = roi
-    print(f"ROI seleccionada: x={x}, y={y}, ancho={w}, alto={h}")
-
-    # 4. Recortar el cubo
-    recorte = data[y : y + h, x : x + w, :].copy()
-    rec_rows, rec_cols, rec_bands = recorte.shape
-    print(f"Cubo recortado con forma: {recorte.shape} (filas, cols, bandas)")
-
-    # 5. Seleccionar carpeta de salida
-    carpeta_salida = seleccionar_carpeta("Selecciona carpeta donde guardar el recorte")
-    base = hdr_path.stem
-    nombre_recorte = f"{base}_recorte"
+    # 3. Seleccionar carpeta de salida (una sola vez)
+    carpeta_salida = seleccionar_carpeta("Selecciona carpeta donde guardar los recortes")
+    base_nombre_original = hdr_path.stem
     
-    # 6. Guardar el cubo recortado en formato ENVI (.bil y .hdr)
-    print("-> Guardando cubo recortado en formato ENVI...")
-    out_hdr_path = carpeta_salida / f"{nombre_recorte}.hdr"
-    out_bil_path = carpeta_salida / f"{nombre_recorte}.bil"
-    
-    try:
-        metanew = dict(cube_hsi.metadata)
-        metanew["lines"] = rec_rows
-        metanew["samples"] = rec_cols
-        metanew["bands"] = rec_bands
-        metanew.pop('reflectance scale factor', None)
-        metanew.pop('data gain values', None)
-        metanew.pop('data offset values', None)
+    recorte_count = 0
 
-        dtype_map = {1: np.uint8, 2: np.int16, 3: np.int32, 4: np.float32, 5: np.float64, 12: np.uint16}
-        original_dtype_code = int(cube_hsi.metadata.get('data type', 12))
-        save_dtype = dtype_map.get(original_dtype_code, np.uint16)
+    while True:
+        recorte_count += 1
+        print(f"\n--- Iniciando recorte #{recorte_count} ---")
 
-        envi.save_image(str(out_hdr_path), recorte.astype(save_dtype), force=True, metadata=metanew, interleave='bil')
+        # 4. Seleccionar ROI con el ratón de forma interactiva
+        roi = select_roi_interactive_custom(banda_uint8)
+
+        if not roi or roi[2] == 0 or roi[3] == 0:
+            print("No se definió ninguna ROI válida o se canceló la selección.")
+            if recorte_count == 1: # Si es el primer intento y se cancela, salir.
+                 sys.exit("Saliendo de la aplicación.")
+            else: # Si ya se hizo al menos un recorte, preguntar si quiere salir.
+                respuesta_salir = input("¿Desea salir de la aplicación? (s/N): ").strip().lower()
+                if respuesta_salir == 's':
+                    sys.exit("Saliendo de la aplicación.")
+                else:
+                    recorte_count -=1 # No se completó este recorte, no incrementar contador
+                    print("Intentando nueva selección de ROI...")
+                    continue # Volver al inicio del bucle para seleccionar otra ROI
+
+        x, y, w, h = roi
+        print(f"ROI seleccionada: x={x}, y={y}, ancho={w}, alto={h}")
+
+        # 5. Recortar el cubo
+        recorte_datos = data[y : y + h, x : x + w, :].copy()
+        rec_rows, rec_cols, rec_bands = recorte_datos.shape
+        print(f"Cubo recortado con forma: {recorte_datos.shape} (filas, cols, bandas)")
+
+        # 6. Generar nombre base para este recorte
+        nombre_recorte_actual = f"{base_nombre_original}_recorte_{recorte_count}"
         
-        out_img_path = out_hdr_path.with_suffix('.img')
-        if out_img_path.exists() and not out_bil_path.exists():
-            out_img_path.rename(out_bil_path)
-            hdr_content = out_hdr_path.read_text().replace(out_img_path.name, out_bil_path.name)
-            out_hdr_path.write_text(hdr_content)
+        # 7. Guardar el cubo recortado en formato ENVI (.bil y .hdr)
+        print("-> Guardando cubo recortado en formato ENVI...")
+        out_hdr_path = carpeta_salida / f"{nombre_recorte_actual}.hdr"
+        out_bil_path = carpeta_salida / f"{nombre_recorte_actual}.bil"
+        
+        try:
+            metanew = dict(cube_hsi.metadata)
+            metanew["lines"] = rec_rows
+            metanew["samples"] = rec_cols
+            metanew["bands"] = rec_bands
+            metanew.pop('reflectance scale factor', None)
+            metanew.pop('data gain values', None)
+            metanew.pop('data offset values', None)
 
-        if out_hdr_path.exists() and out_bil_path.exists():
-            print("Guardado exitoso del cubo hiperespectral:")
-            print(f"  - Archivo de cabecera: {out_hdr_path}")
-            print(f"  - Archivo de datos:    {out_bil_path}")
-        else:
-            print(f"Guardado parcial o con errores en: {out_hdr_path.parent}")
+            dtype_map = {1: np.uint8, 2: np.int16, 3: np.int32, 4: np.float32, 5: np.float64, 12: np.uint16}
+            original_dtype_code = int(cube_hsi.metadata.get('data type', 12))
+            save_dtype = dtype_map.get(original_dtype_code, np.uint16)
+
+            envi.save_image(str(out_hdr_path), recorte_datos.astype(save_dtype), force=True, metadata=metanew, interleave='bil')
             
-    except Exception as e:
-        sys.exit(f"Error guardando el cubo recortado: {e}")
+            out_img_path = out_hdr_path.with_suffix('.img') # spectralpy puede crear .img en lugar de .bil
+            if out_img_path.exists() and not out_bil_path.exists():
+                out_img_path.rename(out_bil_path)
+                # Actualizar el nombre del archivo de datos en el .hdr si es necesario
+                hdr_content = out_hdr_path.read_text()
+                if out_img_path.name in hdr_content:
+                    hdr_content = hdr_content.replace(out_img_path.name, out_bil_path.name)
+                    out_hdr_path.write_text(hdr_content)
 
-    # 7. Guardar un JPEG de la ROI
-    try:
-        roi_uint8 = banda_uint8[y : y + h, x : x + w]
-        img_roi = Image.fromarray(roi_uint8)
-        ruta_jpg = carpeta_salida / f"{nombre_recorte}.jpg"
-        img_roi.save(str(ruta_jpg), format="JPEG", quality=95)
-        print(f"JPEG de la ROI guardado en: {ruta_jpg}")
-    except Exception as e:
-        print(f"¡Aviso! No se pudo guardar la imagen JPEG: {e}")
+            if out_hdr_path.exists() and out_bil_path.exists():
+                print("Guardado exitoso del cubo hiperespectral:")
+                print(f"  - Archivo de cabecera: {out_hdr_path}")
+                print(f"  - Archivo de datos:    {out_bil_path}")
+            else:
+                print(f"Error: No se pudieron generar ambos archivos (.hdr y .bil) en: {out_hdr_path.parent}")
+                # Considerar si continuar o salir si el guardado falla
+        except Exception as e:
+            print(f"Error guardando el cubo recortado: {e}")
+            # Considerar si continuar o salir
 
-    # 8. Guardar la matriz de píxeles en un archivo CSV
-    print("-> Guardando matriz de píxeles en CSV...")
-    try:
-        roi_banda_data = recorte[:, :, band_idx]
-        nombre_csv = f"{nombre_recorte}_banda{wl_str}.csv"
-        ruta_csv = carpeta_salida / nombre_csv
-        # --- CAMBIO IMPORTANTE ---
-        # Usamos punto y coma (;) como delimitador para compatibilidad con Excel en regiones europeas.
-        np.savetxt(str(ruta_csv), roi_banda_data, delimiter=";", fmt="%d")
-        print(f"Matriz de píxeles guardada en: {ruta_csv}")
-    except Exception as e:
-        print(f"¡Aviso! No se pudo guardar el archivo CSV: {e}")
+        # 8. Guardar un JPEG de la ROI
+        try:
+            roi_uint8_recortada = banda_uint8[y : y + h, x : x + w]
+            img_roi = Image.fromarray(roi_uint8_recortada)
+            ruta_jpg = carpeta_salida / f"{nombre_recorte_actual}.jpg"
+            img_roi.save(str(ruta_jpg), format="JPEG", quality=95)
+            print(f"JPEG de la ROI guardado en: {ruta_jpg}")
+        except Exception as e:
+            print(f"¡Aviso! No se pudo guardar la imagen JPEG: {e}")
 
-    print("\n¡Proceso completado! Puedes cerrar esta ventana.")
+        # 9. Guardar la matriz de píxeles en un archivo CSV
+        print("-> Guardando matriz de píxeles en CSV...")
+        try:
+            # Usar el band_idx determinado al inicio para el CSV
+            roi_banda_data_para_csv = recorte_datos[:, :, band_idx] 
+            nombre_csv = f"{nombre_recorte_actual}_banda{wl_str_original}.csv"
+            ruta_csv = carpeta_salida / nombre_csv
+            np.savetxt(str(ruta_csv), roi_banda_data_para_csv, delimiter=";", fmt="%d") # Asumiendo valores enteros para CSV
+            print(f"Matriz de píxeles guardada en: {ruta_csv}")
+        except Exception as e:
+            print(f"¡Aviso! No se pudo guardar el archivo CSV: {e}")
+
+        print(f"\n--- Recorte #{recorte_count} completado ---")
+        
+        respuesta = input("¿Desea realizar otro recorte? (S/n): ").strip().lower()
+        if respuesta == 'n':
+            break
+    
+    print("\n¡Proceso de recorte múltiple completado! Puedes cerrar esta ventana.")
 
 if __name__ == "__main__":
     main()
