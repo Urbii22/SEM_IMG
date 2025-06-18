@@ -36,16 +36,71 @@ def analizar_imagen_matriz(ruta_imagen, dimensiones_grid, ruta_csv_salida):
     # Umbrales originales:
     # rojo_bajo1 = np.array([0, 100, 100], np.uint8)
     # rojo_bajo2 = np.array([170, 100, 100], np.uint8)
+    
+
+    #INERVALOS PARA GOTA VITIPEC WEST (WUPVIT) dividida en SUP e INF
+    
+    # Intervalo que captura el 100 % de los puntos azules de la imagen WUPVIT_SUP (AL) azul
+    #azul_bajo  = np.array([110, 150,  40], np.uint8)   # H≈110-130, S≥150, V≥40
+    #azul_alto  = np.array([130, 255, 255], np.uint8)
+    #mascara_azul = cv2.inRange(imagen_hsv, azul_bajo, azul_alto)
+    
+    # Intervalo que captura el 100 % de los puntos azules de la imagen WUPVIT_INF (AL) amarillo
+    #amarillo_bajo = np.array([25, 150, 40],  np.uint8)   # H: 25-35  (≈50-70°)
+    #amarillo_alto = np.array([35, 255, 255], np.uint8)
+
+    #mascara_amarillo = cv2.inRange(imagen_hsv, amarillo_bajo, amarillo_alto)
+    
+    
+    
+    # Intervalo que captura el 100 % de los puntos azules de la imagen WUPVIT_SUP (S) amarillo
+    #amarillo_bajo = np.array([28, 200, 40],  np.uint8)   # H: 28-32, S≥200, V≥40
+    #amarillo_alto = np.array([32, 255, 255], np.uint8)
+
+    #mascara_amarillo = cv2.inRange(imagen_hsv, amarillo_bajo, amarillo_alto)
+    
+    
+    # Intervalo que captura el 100 % de los puntos azules de la imagen WUPVIT_INF (S) morado
+    #morado_bajo = np.array([130, 150,  25], np.uint8)   # H: 130-140,  S≥150, V≥25
+    #morado_alto = np.array([140, 255, 255], np.uint8)
+
+    #mascara_morado = cv2.inRange(imagen_hsv, morado_bajo, morado_alto)
+    
+
+    
+ 
+    #INERVALOS PARA GOTA VITIPEC EAST (WUPVIT)
+    
+    
+    
+    #Intervalo que captura el 100 % de los puntos azules de la imagen EUPVIT (S) violeta
+    violeta_bajo = np.array([130, 180, 15], np.uint8)   # H 130-140, S≥180, V≥15
+    violeta_alto = np.array([140, 255, 255], np.uint8)
+
+    mascara = cv2.inRange(imagen_hsv, violeta_bajo, violeta_alto)
+    
+    
+    #Intervalo que captura el 100 % de los puntos azules de la imagen EUPVIT (AL) cian
+    #cian_bajo = np.array([90, 150, 15],  np.uint8)   # H 90-105, S≥150, V≥15
+    #cian_alto = np.array([105, 255, 255], np.uint8)
+
+    #mascara = cv2.inRange(imagen_hsv, cian_bajo, cian_alto)
+    
+ 
+   
+    
+    
+    
 
     # Umbrales modificados para mayor sensibilidad a rojos claros:
     # Se reduce el mínimo de Saturación (S) y Valor (V)
-    rojo_bajo1 = np.array([0, 70, 70], np.uint8)  # S y V reducidos desde 100
-    rojo_alto1 = np.array([10, 255, 255], np.uint8)
-    rojo_bajo2 = np.array([170, 70, 70], np.uint8) # S y V reducidos desde 100
-    rojo_alto2 = np.array([179, 255, 255], np.uint8)
-    mascara1 = cv2.inRange(imagen_hsv, rojo_bajo1, rojo_alto1)
-    mascara2 = cv2.inRange(imagen_hsv, rojo_bajo2, rojo_alto2)
-    mascara_rojo = cv2.add(mascara1, mascara2)
+    #rojo_bajo1 = np.array([0, 70, 70], np.uint8)  # S y V reducidos desde 100
+    #rojo_alto1 = np.array([10, 255, 255], np.uint8)
+    #rojo_bajo2 = np.array([170, 70, 70], np.uint8) # S y V reducidos desde 100
+    #rojo_alto2 = np.array([179, 255, 255], np.uint8)
+    #mascara1 = cv2.inRange(imagen_hsv, rojo_bajo1, rojo_alto1)
+    #mascara2 = cv2.inRange(imagen_hsv, rojo_bajo2, rojo_alto2)
+    #mascara_rojo = cv2.add(mascara1, mascara2)
 
     # --- 2. Preparación de la cuadrícula ---
     altura_img, anchura_img, _ = imagen.shape
@@ -66,19 +121,19 @@ def analizar_imagen_matriz(ruta_imagen, dimensiones_grid, ruta_csv_salida):
             y1, y2 = fila * altura_celda, (fila + 1) * altura_celda
             x1, x2 = col * anchura_celda, (col + 1) * anchura_celda
 
-            roi_mascara = mascara_rojo[y1:y2, x1:x2]
+            roi_mascara = mascara[y1:y2, x1:x2]
             pixeles_rojos = cv2.countNonZero(roi_mascara)
             total_pixeles_celda = roi_mascara.size
-            porcentaje_rojo = (pixeles_rojos / total_pixeles_celda) * 100 if total_pixeles_celda > 0 else 0
+            porcentaje = (pixeles_rojos / total_pixeles_celda) * 100 if total_pixeles_celda > 0 else 0
             
-            fila_de_porcentajes.append(round(porcentaje_rojo, 4))
+            fila_de_porcentajes.append("{:.4f}".format(porcentaje).replace('.', ','))
         
         resultados_matriz.append(fila_de_porcentajes)
 
     # --- 4. Guardado en fichero CSV (Formato Matriz) ---
     try:
         with open(ruta_csv_salida, 'w', newline='', encoding='utf-8') as f:
-            escritor = csv.writer(f)
+            escritor = csv.writer(f, delimiter=';')
             escritor.writerows(resultados_matriz)
         print(f"✅ ¡Análisis completado! Resultados guardados en: {ruta_csv_salida}")
     except IOError as e:

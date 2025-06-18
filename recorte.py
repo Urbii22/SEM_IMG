@@ -33,8 +33,8 @@ import sys
 from PIL import Image
 
 # Dimensiones fijas para la ROI (ancho, alto en píxeles originales)
-FIXED_ROI_WIDTH_ORIG = 40
-FIXED_ROI_HEIGHT_ORIG = 32
+FIXED_ROI_WIDTH_ORIG = 26
+FIXED_ROI_HEIGHT_ORIG = 22
 
 
 # Variables globales para la selección interactiva de ROI
